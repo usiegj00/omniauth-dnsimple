@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "omniauth-oauth2"
+require "net/http"
+require "json"
 
 module OmniAuth
   module Strategies
@@ -54,8 +56,8 @@ module OmniAuth
         options[:redirect_uri] || (full_host + callback_path)
       end
 
-      # override method in OmniAuth::Strategies::OAuth2 to error
-      # when we don't have a client_id or secret:
+      # Override method in OmniAuth::Strategies::OAuth2 to error
+      # when we don't have a client_id or secret
       def request_phase
         if missing_client_id?
           fail!(:missing_client_id)
@@ -63,6 +65,37 @@ module OmniAuth
           fail!(:missing_client_secret)
         else
           super
+        end
+      end
+      
+      # Override the build_access_token method to manually handle the token request
+      def build_access_token
+        code = request.params['code']
+        state = request.params['state']
+        
+        # Create the token request manually
+        uri = URI.parse(options.client_options.token_url)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = true
+        
+        request = Net::HTTP::Post.new(uri.path)
+        request.set_form_data({
+          'grant_type' => 'authorization_code',
+          'client_id' => options.client_id,
+          'client_secret' => options.client_secret,
+          'code' => code,
+          'redirect_uri' => callback_url,
+          'state' => state
+        })
+        
+        response = http.request(request)
+        
+        if response.code.to_i == 200
+          data = JSON.parse(response.body)
+          ::OAuth2::AccessToken.from_hash(client, data)
+        else
+          error_msg = "Failed to get access token: #{response.code} - #{response.body}"
+          raise ::OAuth2::Error.new(OpenStruct.new(status: response.code, body: response.body))
         end
       end
 
